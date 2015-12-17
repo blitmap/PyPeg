@@ -27,13 +27,12 @@ isString = (s) -> (typeof s is 'string') or (s instanceof String)
 ###
 
 class Grammar
-	add: (other) -> new @Seq [ @, other ]
-
-	or: (other) -> new @Choice [ @, other ]
+	and: (other) -> @Seq [ @, other ]
+	or: (other) -> @Choice [ @, other ]
 	
 	Node: (name, rule) ->
 		n = new NodeRule rule
-		n.SetName name
+		n.setName name
 		return n
 
 	At: (rule) -> new AtRule rule
@@ -41,7 +40,7 @@ class Grammar
 	Choice: (rules) -> new ChoiceRule rules
 	Seq: (rules) -> new SeqRule rules
 	Opt: (rules) -> new OptRule rules
-	ZeroOrMore: (r) -> new ZeroOrMore r
+	ZeroOrMore: (r) -> new ZeroOrMoreRule r
 	OneOrMore: (r) -> new PlusRule r
 	MatchString: (s) -> new StringRule s
 	Delay: -> new DelayRule
@@ -54,7 +53,7 @@ class Grammar
 		unless r?
 			throw new Error 'Cannot build this AdvanceWhileNot without a parser'
 
-		return new ZeroOrMoreRule @Seq [ @Not(r), @AnyChar() ]
+		return @ZeroOrMore @Seq [ @Not(r), @AnyChar() ]
 
 ###
 ================================================================================
@@ -68,16 +67,16 @@ class Node
 	# @label: the name of the node
 	# @inputs: the input string
 	# @theend: where we stop
-	constructor: (@begin, @label, @inputs) ->
+	constructor: (@begin, @label = '?', @inputs) ->
 		@theend = @inputs.length
 		@nodes = []
 
-	length: -> Math.max(@theend - @begin, 0)
+	length: -> Math.max @theend - @begin, 0
 
 	isLeaf: -> @nodes.isEmpty()
 
 	# Text associated with the parse result.
-	text: -> @inputs[@begin..@theend]
+	text: -> @inputs[@begin...@theend]
 
 	withLabel: (label) -> @getNode label
     
@@ -94,7 +93,7 @@ class Node
 
 	descendants: -> c for c in n.descendants() for n in @nodes
 
-	toString: -> "#{label}->'#{@text()}'"
+	toString: -> "#{@label} -> '#{@text()}'"
 	toRepr: -> "Node #{@label} Text: '#{@text()}'"
 
 ###
@@ -113,7 +112,7 @@ class ParserState
 
 	assign: ({ @inputs, @pos, @nodes }) ->
 
-	clonse: -> new ParserState @inputs, @pos, @nodes
+	clone: -> new ParserState @inputs, @pos, @nodes
     
 	restoreAfter: (action) ->
 		old_state = @clone()
@@ -144,8 +143,9 @@ class ParserState
 ================================================================================
 ###
 
-class Rule
+class Rule extends Grammar
 	constructor: (rules) ->
+		super()
 		@_name        = 'no_name'
 		@children     = []
 		@is_recursive = false
@@ -155,15 +155,10 @@ class Rule
 		else
 			@children.push rules
 
-	add: (other) -> new Grammar.Seq [ @, other ]
-	or: (other) -> new Grammar.Choice [ @, other ]
-
     # Getters & Setters  
 	name: -> @_name
  
-	name: (@_name) ->
-    
-	SetName: (@_name) -> @
+	setName: (@_name) -> @
 
 	child: -> @children[0]
 
@@ -176,11 +171,10 @@ class Rule
 	matchTest: (something) -> "Matching #{@} against '#{something}' ===> #{@match something}"
 
 	match: (something) ->
-		if isString something
-			@match new ParserState something, 0
-		else
+		if something instanceof ParserState
 			@internalMatch something
-		
+		else
+			@match new ParserState something, 0
 
 	parse: (input) ->
 		thestate = new ParserState input, 0
@@ -205,7 +199,7 @@ class AtRule extends Rule
 
 	internalMatch: (thestate) ->
 		old    = @clone()
-		result = @child.match thestate
+		result = @child().match thestate
 		thestate.assign old
 		return result
     
@@ -217,7 +211,7 @@ class NotRule extends Rule
 	internalMatch: (thestate) ->
 		old = @clone()
 
-		if @child.match thestate
+		if @child().match thestate
 			thestate.assign old
 			return false
 
@@ -226,7 +220,7 @@ class NotRule extends Rule
 	toString: -> "Not: #{@child()}"
 
 class NodeRule extends Rule
-	constructor: (rules) ->
+	constructor: ->
 		super
 		@_name = 'NodeRule'
 		@useCache = true
@@ -252,14 +246,13 @@ class NodeRule extends Rule
 			return true
         
 		# Result has not been cached
-		node = new Node thestate.pos @name(), thestate.inputs
+		node = new Node thestate.pos, @name(), thestate.inputs
 		oldNodes = thestate.nodes
 		thestate.nodes = []
 
-		res = @child.match thestate
+		res = @child().match thestate
 
 		if res
-			node.theend = theend.pos
 			node.theend = thestate.pos
 			node.nodes  = thestate.nodes
 
@@ -278,7 +271,7 @@ class NodeRule extends Rule
 		oldNodes = thestate.nodes
 		thestate.nodes = []
 		
-		res = @child.match thestate
+		res = @child().match thestate
 
 		if res
 			node.theend = thestate.pos
@@ -338,7 +331,7 @@ class OptRule extends Rule
 	constructor: -> super
 
 	internalMatch: (thestate) ->
-		@child.match thestate
+		@child().match thestate
 		return true
 
 	toString: -> "Opt: #{@childInString()}"
@@ -348,7 +341,7 @@ class ZeroOrMoreRule extends Rule
 
 	internalMatch: (thestate) ->
 		loop
-			break unless @child.match thestate
+			break unless @child().match thestate
 
 		return true
 
@@ -359,10 +352,10 @@ class PlusRule extends Rule
 
 	# used for OneOrMore
 	internalMatch: (thestate) ->
-		return false unless @child.match thestate
+		return false unless @child().match thestate
 
 		loop
-			break unless @child.match thestate
+			break unless @child().match thestate
 
 		return true
 
@@ -391,12 +384,13 @@ class CharRule extends Rule
 	toString: -> "Char: #{@predicate}"
 
 class RegexRule extends Rule
-	constructor: (@reg, @consume = false) ->
+	# XXX: in the future: default to non-consuming regexps
+	constructor: (@reg, @consume = true) ->
+		super()
 		try
 			# XXX: we can do this nicer in the future
 			@reg = eval(@reg + 'g')
-
-		super()
+			@reg = eval(@reg + 'y')
 
 	internalMatch: (thestate) ->
 		@reg.lastIndex = thestate.pos
@@ -414,10 +408,10 @@ class RegexRule extends Rule
 
 class DelayRule extends Rule
 	constructor: ->
+		super()
 		@my_rule = null
 		@children = []
 		@name 'Delayed'
-		super()
 
 	set: (@my_rule) ->
 
@@ -425,6 +419,8 @@ class DelayRule extends Rule
 		if @children.isEmpty()
 			@children.push @my_rule
 
-		return @child.match parser_state
+		return @child().match parser_state
 
 	toString: -> 'RecursiveRule2'
+
+module.exports = Grammar
