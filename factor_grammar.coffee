@@ -23,6 +23,10 @@ Define          = g.Node 'Define', g.MatchString('def').and WS.and Symbol.and WS
 CListTerm.set (Define.or Atom.or Quotation).and WS
 Term.set (Define.or Atom.or Quotation.or CList).and WS
 
+module.exports = Terms
+
+return unless require.main is module
+
 res = Terms.parse '5 10 div .'
 #res= Terms.parse('def neg [0 swap -]')
 
