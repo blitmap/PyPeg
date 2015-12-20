@@ -198,7 +198,7 @@ class AtRule extends Rule
 	constructor: -> super
 
 	internalMatch: (thestate) ->
-		old    = @clone()
+		old    = thestate.clone()
 		result = @child().match thestate
 		thestate.assign old
 		return result
@@ -209,7 +209,7 @@ class NotRule extends Rule
 	constructor: -> super
 
 	internalMatch: (thestate) ->
-		old = @clone()
+		old = thestate.clone()
 
 		if @child().match thestate
 			thestate.assign old
